@@ -1,13 +1,11 @@
 import sys
 from numpy import *
-#from pulp import *
 from cvxopt import solvers,matrix,sparse,umfpack
 from scipy.misc import factorial
 import wx
 import time
 import wx.lib.plot as plot
 import wx.lib.scrolledpanel as scrolled
-from matplotlib.pyplot import figure, show
 
 class SplineOptim:
     def __init__(self):
@@ -697,7 +695,8 @@ class MainFrame(wx.Frame):
         abtInfo.SetName("SplineOptim")
         abtInfo.SetDescription("A program for motion law design (2018). "\
                                "Based on article: Optimal Splines for Rigid Motion Systems: A Convex Programming Framework, "\
-                                "Bram Demeulenaere et al. Journal of Mechanical Design 131(10).")
+                               "B. Demeulenaere, J. De Caigny, G. Pipeleers, J. De Schutter and J. Swevers, "\
+                               "Journal of Mechanical Design 131(10).")
         abtInfo.SetDevelopers(["Diederik Verscheure"])
         abtInfo.SetCopyright("GPL license")
         abtInfo.SetVersion("0.1")
