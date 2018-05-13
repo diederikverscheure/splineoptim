@@ -19,7 +19,7 @@ class SplineOptim:
         self.AddConstraint(0, self.ts, self.te, 1, 2)
         self.AddObjective(2, self.M+1, 1)
         self.AddObjective(0, self.M+2, 0.01)
-        self.xs = zeros((self.K+1,self.M+2))
+        self.xs = zeros((self.K+1,self.M+3))
 
     def GetNames(self):
         names = ["Position", "Velocity", "Acceleration", "Jerk", "Jolt"]
@@ -367,10 +367,10 @@ class SplineOptim:
                 Ab[2*i-1,(i+1)*(self.K+1)-1] = 1
         elif self.bctype == 1:
             # Periodic
-            Ab = zeros((self.N,(self.M+1)*(self.K+1)))
-            for i in range(1,self.N+1):
-                Ab[i-1,i*(self.K+1)] = 1
-                Ab[i-1,(i+1)*(self.K+1)-1] = -1
+            Ab = zeros((self.N+1,(self.M+1)*(self.K+1)))
+            for i in range(0,self.N+1):
+                Ab[i,i*(self.K+1)] = 1
+                Ab[i,(i+1)*(self.K+1)-1] = -1
         elif self.bctype == 2:
             # Symmetric
             Ab = zeros((self.N+1,(self.M+1)*(self.K+1)))
@@ -453,22 +453,14 @@ class MainFrame(wx.Frame):
         self.pnlOptions.SetSizer(self.bsOptions)
         
         self.bsPlot = wx.BoxSizer(wx.VERTICAL)
-        self.pcPosition = plot.PlotCanvas(self.pnlPlot)
-        self.pcPosition.SetInitialSize(self.plotSize)
-        self.pcPosition.SetEnableGrid(True)
-
-        self.pcVelocity = plot.PlotCanvas(self.pnlPlot)
-        self.pcVelocity.SetInitialSize(self.plotSize)
-        self.pcVelocity.SetEnableGrid(True)
-
-        self.pcAcceleration = plot.PlotCanvas(self.pnlPlot)
-        self.pcAcceleration.SetInitialSize(self.plotSize)
-        self.pcAcceleration.SetEnableGrid(True)
-
-        self.bsPlot.Add(self.pcPosition, 0, self.layoutFlags, self.border)
-        self.bsPlot.Add(self.pcVelocity, 0, self.layoutFlags, self.border)
-        self.bsPlot.Add(self.pcAcceleration, 0, self.layoutFlags, self.border)
         self.pnlPlot.SetSizer(self.bsPlot)
+        self.plotCanvas = []
+        for i in range(0,self.SplineOptim.GetContLevel()+4):
+            self.plotCanvas.insert(i,plot.PlotCanvas(self.pnlPlot))
+            self.plotCanvas[i].SetInitialSize(self.plotSize)
+            self.plotCanvas[i].SetEnableGrid(True)
+            self.bsPlot.Add(self.plotCanvas[i], 0, self.layoutFlags, self.border)
+        #self.plotCanvas[self.SplineOptim.GetContLevel()+3].SetEnableLegend(True)
         
     def SetupMenus(self):
         # Menu and statusbar 
@@ -656,19 +648,34 @@ class MainFrame(wx.Frame):
         
     def PlotSolution(self):
         time = self.SplineOptim.GetTime()
-        x0 = self.SplineOptim.GetSolution(0)
-        x1 = self.SplineOptim.GetSolution(1) 
-        x2 = self.SplineOptim.GetSolution(2) 
-        data0 = vstack((time,x0))
-        data1 = vstack((time,x1))
-        data2 = vstack((time,x2))
-        line0 = plot.PolyLine(data0.transpose(), colour='red', width=1)
-        self.pcPosition.Draw(plot.PlotGraphics([line0], 'Position', 'time (s)', 'position (m)'))        
-        line1 = plot.PolyLine(data1.transpose(), colour='red', width=1)
-        self.pcVelocity.Draw(plot.PlotGraphics([line1], 'Velocity', 'time (s)', 'velocity (m/s)'))        
-        line2 = plot.PolyLine(data2.transpose(), colour='red', width=1)
-        self.pcAcceleration.Draw(plot.PlotGraphics([line2], 'Acceleration', 'time (s)', 'acceleration (m/s2)'))        
-    
+        names = self.SplineOptim.GetNames()
+        norms = self.SplineOptim.GetNorms()
+        for i in range(0,self.SplineOptim.GetContLevel()+3):
+            x = self.SplineOptim.GetSolution(i)
+            data = vstack((time,x))
+            line = plot.PolyLine(data.transpose(), colour='red', width=1) #, legend=names[i].lower())
+            xAxis = 'time [s]'
+            yAxis = names[i].lower() + ' (m/s^' + str(i) + ')'
+            self.plotCanvas[i].Draw(plot.PlotGraphics([line], names[i], xAxis, yAxis))        
+        line = []
+        colour = ['blue','green','black','violet']
+        for i in range(0,self.SplineOptim.GetNrObjectives()):
+            wi = self.SplineOptim.GetObjWeight(i)
+            ni = int(self.SplineOptim.GetObjNorm(i))
+            vi = int(self.SplineOptim.GetObjValue(i))
+            if ni == 0:
+                x = wi*abs(self.SplineOptim.GetSolution(vi))
+            elif ni == 1:
+                x = wi*self.SplineOptim.GetSolution(vi)**2.0
+            elif ni >= 2:
+                x = wi*abs(self.SplineOptim.GetSolution(vi))
+            data = vstack((time,x))
+            line.insert(i,plot.PolyLine(data.transpose(), colour=colour[i], width=1)) #, legend=norms[ni] + ' ' + names[vi]))
+        xAxis = 'time [s]'
+        yAxis = 'weighted objective functions [-]'
+        self.plotCanvas[self.SplineOptim.GetContLevel()+3].Draw(plot.PlotGraphics(line, 'Objective functions', xAxis, yAxis))        
+            
+
     def OnLoad(self, evt):
         wx.MessageBox("Load clicked", "Event handler", wx.OK)
                 
