@@ -6,6 +6,7 @@ import wx
 import time
 import wx.lib.plot as plot
 import wx.lib.scrolledpanel as scrolled
+import xml.dom.minidom as minidom
 
 class SplineOptim:
     def __init__(self):
@@ -73,6 +74,23 @@ class SplineOptim:
 
     def GetObjectives(self):
         return self.objectives
+
+    def GetDict(self):
+        d = {'units': self.units, 
+             'RPM': self.RPM,
+             'ts': self.ts,
+             'te': self.te,
+             'K': self.K,
+             'M': self.M,
+             'bctype': self.bctype,
+             'N': self.N,
+             'solver': self.solver,
+             'output': self.output,
+             'constraints': self.constraints,
+             'objectives': self.objectives
+             }
+        return d
+        
 
     def SetOptions(self, units, RPM, ts, te, K, M, bctype, N, solver, output):
         self.units = units
@@ -458,7 +476,7 @@ class MainFrame(wx.Frame):
         for i in range(0,self.SplineOptim.GetContLevel()+4):
             self.plotCanvas.insert(i,plot.PlotCanvas(self.pnlPlot))
             self.plotCanvas[i].SetInitialSize(self.plotSize)
-            self.plotCanvas[i].SetEnableGrid(True)
+            self.plotCanvas[i].enableGrid = True
             self.bsPlot.Add(self.plotCanvas[i], 0, self.layoutFlags, self.border)
         #self.plotCanvas[self.SplineOptim.GetContLevel()+3].SetEnableLegend(True)
         
@@ -677,10 +695,35 @@ class MainFrame(wx.Frame):
             
 
     def OnLoad(self, evt):
-        wx.MessageBox("Load clicked", "Event handler", wx.OK)
+        flDialog = wx.FileDialog(self, defaultFile='splineoptim.xml', wildcard='*.xml', style=wx.FD_OPEN)
+        if flDialog.ShowModal() == wx.ID_CANCEL:
+            return
+        fileName = flDialog.GetPath()
+        doc = minidom.parse(fileName)
+        for child in doc.childNodes:
+            for child2 in child.childNodes:
+                if child2.hasChildNodes():
+                    print(child2.nodeName)
+                    print(child2.childNodes[0].data)
+        
                 
     def OnSave(self, evt):
-        wx.MessageBox("Save clicked", "Event handler", wx.OK)
+        flDialog = wx.FileDialog(self, defaultFile='splineoptim.xml', wildcard='*.xml', style=wx.FD_SAVE)
+        if flDialog.ShowModal() == wx.ID_CANCEL:
+            return
+        fileName = flDialog.GetPath()
+        doc = minidom.Document()
+        root = doc.createElement('SplineOptim')
+        XMLvalues = self.SplineOptim.GetDict()
+        print(XMLvalues)
+        for value in XMLvalues:
+            tempChild = doc.createElement(value)
+            root.appendChild(tempChild)
+            nodeText = doc.createTextNode(str(XMLvalues[value]).strip())
+            tempChild.appendChild(nodeText)
+        doc.appendChild(root)
+        doc.writexml(open(fileName,'w'),indent=' ',addindent=' ',newl='\n')
+        doc.unlink()        
                 
     def OnQuit(self, evt):
         self.Close()
