@@ -1,8 +1,10 @@
 import sys
-from numpy import *
-from cvxopt import solvers,matrix,sparse,umfpack
+import numpy as np
+import cvxopt as cvx
+from cvxopt import umfpack
 from scipy.misc import factorial
 import wx
+import wx.adv
 import time
 import wx.lib.plot as plot
 import wx.lib.scrolledpanel as scrolled
@@ -10,30 +12,34 @@ import xml.dom.minidom as minidom
 
 class SplineOptim:
     def __init__(self):
-        self.constraints = array([], dtype=float)
-        self.objectives = array([], dtype=float)
+        self.constraints = np.array([], dtype=float)
+        self.objectives = np.array([], dtype=float)
         # units, RPM, start time, end time, grid size, cont level,
         # bound cond type, bound cond level, solver, output
-        self.SetOptions(0, 0, 0, 10, 50, 2, 0, 2, 0, 0)
-        self.AddConstraint(0, self.ts, self.ts, 1, 1)
-        self.AddConstraint(0, self.te/2.0, self.te/2.0, 2, 2)
-        self.AddConstraint(0, self.ts, self.te, 1, 2)
+        self.SetOptions('time', 300.0, 0.0, 10.0, 50, 2, 'zero', 2, 'glpk', 'verbose')
+        self.AddConstraint(0, self.ts, self.ts, 1.0, 1.0)
+        self.AddConstraint(0, self.te/2.0, self.te/2.0, 2.0, 2.0)
+        self.AddConstraint(0, self.te, self.te, 1.5, 1.5)
+        self.AddConstraint(0, self.ts, self.te, 1.0, 2.0)
         self.AddObjective(2, self.M+1, 1)
         self.AddObjective(0, self.M+2, 0.01)
-        self.xs = zeros((self.K+1,self.M+3))
+        self.xs = np.zeros((self.K+1,self.M+3))
 
     def GetNames(self):
-        names = ["Position", "Velocity", "Acceleration", "Jerk", "Jolt"]
+        names = ["position", "velocity", "acceleration", "jerk", "jolt"]
         for i in range(5,int(self.M)+2):
             name = str(i) + "th derivative"
             names = names + [name]
         return names[0:int(self.M)+3]
     
     def GetNorms(self):
-        return ["One-norm", "Two-norm", "Inf-norm", "Max. abs", "Min. abs"]
+        return ["one-norm", "two-norm", "inf-norm", "max. abs", "min. abs"]
 
     def GetUnits(self):
         return self.units        
+    
+    def GetUnitTypes(self):
+        return ['time','degrees','radians']
         
     def GetRPM(self):
         return self.RPM
@@ -52,6 +58,9 @@ class SplineOptim:
                 
     def GetBoundCondType(self):
         return self.bctype
+    
+    def GetBoundCondTypes(self):
+        return ['zero','periodic','symmetric']
 
     def GetBoundCondLevel(self):
         return self.N
@@ -59,11 +68,17 @@ class SplineOptim:
     def GetSolver(self):
         return self.solver
     
-    def GetOutputLevel(self):
+    def GetSolvers(self):
+        return ['conelp','glpk','mosek','pulp']
+    
+    def GetOutput(self):
         return self.output
+    
+    def GetOutputTypes(self):
+        return ['none','verbose']
                 
     def GetTime(self):
-        return linspace(self.ts,self.te,self.K+1)
+        return np.linspace(self.ts,self.te,self.K+1)
     
     def GetSolution(self, k):
         if k <= self.xs.shape[1]:
@@ -71,9 +86,15 @@ class SplineOptim:
             
     def GetConstraints(self):
         return self.constraints
+    
+    def SetConstraints(self,constraints):
+        self.constraints = constraints
 
     def GetObjectives(self):
         return self.objectives
+    
+    def SetObjectives(self,objectives):
+        self.objectives = objectives
 
     def GetDict(self):
         d = {'units': self.units, 
@@ -90,13 +111,19 @@ class SplineOptim:
              'objectives': self.objectives
              }
         return d
-        
+    
+    def SetDict(self,d):
+        self.SetOptions(d['units'],d['RPM'],d['ts'],d['te'],d['K'],d['M'],d['bctype'],d['N'],d['solver'],d['output'])
+        self.SetConstraints(d['constraints'])
+        self.SetObjectives(d['objectives'])                
 
     def SetOptions(self, units, RPM, ts, te, K, M, bctype, N, solver, output):
         self.units = units
         self.RPM = RPM
         self.ts = ts
         self.te = te
+        if self.units == 'time':
+            self.RPM = 1.0/self.te*60
         self.K = int(K)
         self.M = int(M)
         self.bctype = bctype
@@ -107,10 +134,14 @@ class SplineOptim:
             self.SetConstrValue(i, min(self.GetConstrValue(i), self.GetContLevel()+3))
         for i in range(self.GetNrObjectives()):
             self.SetObjValue(i, min(self.GetObjValue(i), self.GetContLevel()+3))
-        if output == 0:
-            solvers.options['show_progress'] = False
+        if output == 'none':
+            cvx.solvers.options['show_progress'] = False
+            if self.solver == 'glpk':
+                cvx.solvers.options['msg_lev'] = 'GLP_MSG_OFF'
         else:
-            solvers.options['show_progress'] = True
+            cvx.solvers.options['show_progress'] = True
+            if self.solver == 'glpk':
+                cvx.solvers.options['msg_lev'] = 'GLP_MSG_ON'
 
     def GetNrConstraints(self):
         return self.constraints.shape[0]
@@ -171,7 +202,7 @@ class SplineOptim:
 
     def RemoveConstraint(self, i):
         if i < self.GetNrConstraints() and i >= 0:
-            j = setdiff1d(array(range(self.GetNrConstraints())),array([i]))
+            j = np.setdiff1d(np.array(range(self.GetNrConstraints())),np.array([i]))
             self.constraints = self.constraints[j,:]
         
     def UpdateConstraint(self, i, k, tl, tu, xl, xu):
@@ -192,10 +223,10 @@ class SplineOptim:
             self.constraints[i,5] = 0
         else:
             if self.GetNrConstraints() == 0:
-                self.constraints = array([[k, tl, tu, xl, xu, 0]], dtype=float)
+                self.constraints = np.array([[k, tl, tu, xl, xu, 0]], dtype=float)
             else:
-                constraint = array([k, tl, tu, xl, xu, 0], dtype=float)
-                self.constraints = vstack((self.constraints, constraint))
+                constraint = np.array([k, tl, tu, xl, xu, 0], dtype=float)
+                self.constraints = np.vstack((self.constraints, constraint))
 
     def GetNrObjectives(self):
         return self.objectives.shape[0]    
@@ -229,7 +260,7 @@ class SplineOptim:
         
     def RemoveObjective(self, i):
         if i < self.GetNrObjectives() and i >= 0:
-            j = setdiff1d(array(range(self.GetNrObjectives())),array([i]))
+            j = np.setdiff1d(np.array(range(self.GetNrObjectives())),np.array([i]))
             self.objectives = self.objectives[j,:]
 
     def UpdateObjective(self, i, n, k, w):
@@ -239,22 +270,27 @@ class SplineOptim:
             self.SetObjWeight(i,w)
         else:
             if self.GetNrObjectives() == 0:
-                self.objectives = array([[n, k, w]], dtype=float)
+                self.objectives = np.array([[n, k, w]], dtype=float)
             else:
-                objective = array([n, k, w], dtype=float)
-                self.objectives = vstack((self.objectives, objective))
+                objective = np.array([n, k, w], dtype=float)
+                self.objectives = np.vstack((self.objectives, objective))
 
     def SetupProb(self):
+        # Integration conditions
         Ai = self.GetIntegration()
-        bi = zeros((Ai.shape[0],1))
+        bi = np.zeros((Ai.shape[0],1))
+        # Boundary conditions
         Ab = self.GetBoundCond()
-        bb = zeros((Ab.shape[0],1))
-        Aeq = vstack((Ai,Ab))
-        beq = vstack((bi,bb))
-        Aineq = zeros((0,(self.M+1)*(self.K+1)))
-        bineq = zeros((Aineq.shape[0],1))
-        bs = zeros((0,1))
-        c = zeros(((self.K+1)*(self.M+1),1))        
+        bb = np.zeros((Ab.shape[0],1))
+        # Equality conditions
+        Aeq = np.vstack((Ai,Ab))
+        beq = np.vstack((bi,bb))
+        # Inequality conditions
+        Aineq = np.zeros((0,(self.M+1)*(self.K+1)))
+        bineq = np.zeros((Aineq.shape[0],1))
+        # Slack variables?
+        bs = np.zeros((0,1))
+        c = np.zeros(((self.K+1)*(self.M+1),1))        
         t = self.GetTime()
         for i in range(self.GetNrObjectives()):
             n = self.GetObjNorm(i)
@@ -263,135 +299,143 @@ class SplineOptim:
             As = self.GetSlackCond(k)
             if n == 0:
                 # one-norm
-                c = vstack((c,w*ones((As.shape[0],1))/As.shape[0]))
-                Az = zeros((As.shape[0],Aineq.shape[1]-(self.M+1)*(self.K+1)))
-                Ao1 = hstack((-As,Az,-eye(As.shape[0])))
-                Ao2 = hstack((As,Az,-eye(As.shape[0])))
-                Ao = vstack((Ao1,Ao2))
+                c = np.vstack((c,w*np.ones((As.shape[0],1))/As.shape[0]))
+                Az = np.zeros((As.shape[0],Aineq.shape[1]-(self.M+1)*(self.K+1)))
+                Ao1 = np.hstack((-As,Az,-np.eye(As.shape[0])))
+                Ao2 = np.hstack((As,Az,-np.eye(As.shape[0])))
+                Ao = np.vstack((Ao1,Ao2))
             elif n == 1:
                 # two-norm
-                Ao = zeros((0,Aineq.shape[1]))
+                Ao = np.zeros((0,Aineq.shape[1]))
             elif n == 2:
                 # inf-norm
-                c = vstack((c,w))
-                Az = zeros((As.shape[0],Aineq.shape[1]-(self.M+1)*(self.K+1)))
-                Ao1 = hstack((-As,Az,-ones((As.shape[0],1))))
-                Ao2 = hstack((As,Az,-ones((As.shape[0],1))))
-                Ao = vstack((Ao1,Ao2))
-            Aineq = vstack((hstack((Aineq,zeros((Aineq.shape[0],Ao.shape[1]-Aineq.shape[1])))),Ao))
-            bineq = vstack((bineq,zeros((Ao.shape[0],1))))
-        bs = vstack((bs,bineq.shape[0]))
+                c = np.vstack((c,w))
+                Az = np.zeros((As.shape[0],Aineq.shape[1]-(self.M+1)*(self.K+1)))
+                Ao1 = np.hstack((-As,Az,-np.ones((As.shape[0],1))))
+                Ao2 = np.hstack((As,Az,-np.ones((As.shape[0],1))))
+                Ao = np.vstack((Ao1,Ao2))
+            Aineq = np.vstack((np.hstack((Aineq,np.zeros((Aineq.shape[0],Ao.shape[1]-Aineq.shape[1])))),Ao))
+            bineq = np.vstack((bineq,np.zeros((Ao.shape[0],1))))
+        bs = np.vstack((bs,bineq.shape[0]))
         for i in range(self.GetNrConstraints()):
             k = self.GetConstrValue(i)
             tl = self.GetFromTime(i)
             tu = self.GetToTime(i)
             xl = self.GetFromValue(i)
             xu = self.GetToValue(i)
-            ti = hstack((tl,t[(t>tl)*(t<tu)],tu))
-            ti = unique(setdiff1d(ti,[-inf, inf]))
-            Ac = zeros((ti.shape[0],(self.M+1)*(self.K+1)))
-            idx = max(0,k-1)*(self.K+1) + interp(ti,t,range(t.shape[0]))
+            ti = np.hstack((tl,t[(t>tl)*(t<tu)],tu))
+            ti = np.unique(np.setdiff1d(ti,[-np.inf, np.inf]))
+            Ac = np.zeros((ti.shape[0],(self.M+1)*(self.K+1)))
+            idx = max(0,k)*(self.K+1) + np.interp(ti,t,range(t.shape[0]))
             for j in range(ti.shape[0]):
                 if round(idx[j]) == idx[j]:
                     Ac[j,int(idx[j])] = 1
                 else:
-                    Ac[j,int(floor(idx[j]))] = (ceil(idx[j])-idx[j])
-                    Ac[j,int(ceil(idx[j]))] = (idx[j]-floor(idx[j]))
-            if isfinite(xl) and isfinite(xu) and xl == xu:
-                Aeq = vstack((Aeq,Ac))
-                beq = vstack((beq,xl*ones((ti.shape[0],1))))
+                    Ac[j,int(np.floor(idx[j]))] = (np.ceil(idx[j])-idx[j])
+                    Ac[j,int(np.ceil(idx[j]))] = (idx[j]-np.floor(idx[j]))
+            if np.isfinite(xl) and np.isfinite(xu) and xl == xu:
+                Aeq = np.vstack((Aeq,Ac))
+                beq = np.vstack((beq,xl*np.ones((ti.shape[0],1))))
             else:
-                if isfinite(xl):
-                    Aineq = vstack((Aineq,hstack((-Ac,zeros((Ac.shape[0],Aineq.shape[1]-Ac.shape[1]))))))
-                    bineq = vstack((bineq,-xl*ones((ti.shape[0],1))))
-                if isfinite(xu):
-                    Aineq = vstack((Aineq,hstack((Ac,zeros((Ac.shape[0],Aineq.shape[1]-Ac.shape[1]))))))
-                    bineq = vstack((bineq,xu*ones((ti.shape[0],1))))
-            bs = vstack((bs,(xl != xu)*(isfinite(xl)*1+isfinite(xu)*1)*Ac.shape[0]))
-        Aeq = hstack((Aeq,zeros((Aeq.shape[0],Aineq.shape[1]-Aeq.shape[1]))))
+                if np.isfinite(xl):
+                    Aineq = np.vstack((Aineq,np.hstack((-Ac,np.zeros((Ac.shape[0],Aineq.shape[1]-Ac.shape[1]))))))
+                    bineq = np.vstack((bineq,-xl*np.ones((ti.shape[0],1))))
+                if np.isfinite(xu):
+                    Aineq = np.vstack((Aineq,np.hstack((Ac,np.zeros((Ac.shape[0],Aineq.shape[1]-Ac.shape[1]))))))
+                    bineq = np.vstack((bineq,xu*np.ones((ti.shape[0],1))))
+            bs = np.vstack((bs,(xl != xu)*(np.isfinite(xl)*1+np.isfinite(xu)*1)*Ac.shape[0]))
+        Aeq = np.hstack((Aeq,np.zeros((Aeq.shape[0],Aineq.shape[1]-Aeq.shape[1]))))
 
-        # Presolve integration equations
-        idx = hstack((range(0,self.M*(self.K+1),self.K+1),range(self.M*(self.K+1),(self.M+1)*(self.K+1))))
-        didx = setdiff1d(range(0,(self.M+1)*(self.K+1)),idx)
-        Ar = matrix(-Ai[:,idx])
-        Al = sparse(matrix(Ai[:,didx]))
-        umfpack.linsolve(Al,Ar)
+        self.presolve = False
+        if self.presolve == True:
+            # Presolve integration equations
+            idx = np.hstack((range(0,self.M*(self.K+1),self.K+1),range(self.M*(self.K+1),(self.M+1)*(self.K+1))))
+            didx = np.setdiff1d(range(0,(self.M+1)*(self.K+1)),idx)
+            Ar = cvx.matrix(-Ai[:,idx])
+            Al = cvx.sparse(cvx.matrix(Ai[:,didx]))
+            umfpack.linsolve(Al,Ar)
+            
+            Ar = np.array(Ar)
+            At = np.zeros((Ai.shape[1],Ar.shape[1]))
+            At[didx,:] = Ar
+            At[idx,:] = np.eye(Ar.shape[1])
+            At = np.hstack((At,np.zeros((At.shape[0],Aeq.shape[1]-Ai.shape[1]))))
+            At = np.vstack((At,np.hstack((np.zeros((Aeq.shape[1]-Ai.shape[1],Ar.shape[1])),np.eye(Aeq.shape[1]-Ai.shape[1])))))
+            self.At = At
+            
+            Aeq = np.dot(Aeq,At)
+            Aeq = Aeq[Ai.shape[0]:,:]
+            beq = beq[Ai.shape[0]:,:]
+            Aineq = np.dot(Aineq,At)
+            c = np.dot(np.transpose(At),c)
         
-        Ar = array(Ar)
-        At = zeros((Ai.shape[1],Ar.shape[1]))
-        At[didx,:] = Ar
-        At[idx,:] = eye(Ar.shape[1])
-        At = hstack((At,zeros((At.shape[0],Aeq.shape[1]-Ai.shape[1]))))
-        At = vstack((At,hstack((zeros((Aeq.shape[1]-Ai.shape[1],Ar.shape[1])),eye(Aeq.shape[1]-Ai.shape[1])))))
-        self.At = At
-        
-        Aeq = dot(Aeq,At)
-        Aeq = Aeq[Ai.shape[0]:,:]
-        beq = beq[Ai.shape[0]:,:]
-        Aineq = dot(Aineq,At)
-        c = dot(transpose(At),c)
-        
-        self.Aeq = sparse(matrix(Aeq))
-        self.beq = matrix(beq)
-        self.Aineq = sparse(matrix(Aineq))
-        self.bineq = matrix(bineq)
-        self.c = matrix(c)
+        self.Aeq = cvx.sparse(cvx.matrix(Aeq))
+        self.beq = cvx.matrix(beq)
+        self.Aineq = cvx.sparse(cvx.matrix(Aineq))
+        self.bineq = cvx.matrix(bineq)
+        self.c = cvx.matrix(c)
         self.bs = bs
     
     def SolveProb(self):
         self.SetupProb()
         t1 = time.time()
-        sol = solvers.lp(self.c,self.Aineq,self.bineq,self.Aeq,self.beq)
+        if self.solver == 'conelp':
+            solver = None
+        else:
+            solver = self.solver
+        sol = cvx.solvers.lp(self.c,self.Aineq,self.bineq,self.Aeq,self.beq,solver=solver)
         t2 = time.time()
-        xs = array(sol.get('x'))
-        ys = array(sol.get('y'))
-        ss = array(sol.get('s'))
-        for i in range(self.GetNrConstraints()):
-            if self.bs[i+1] != 0:
-                self.SetConstrCost(i, sum(ss[range(int(sum(self.bs[0:i+1])),int(sum(self.bs[0:i+1])+self.bs[i+1]))]))
         status = sol.get('status') == 'optimal'
-        xs = dot(self.At,xs)
-        self.xs = reshape(xs[0:(self.M+1)*(self.K+1)],(self.K+1,self.M+1),'F')
-        t = self.GetTime()
-        xM1 = hstack((0,diff(self.xs[:,self.M],1,0)/diff(t),0))
-        tm = hstack((t[0],t[0:-1]/2+t[1:]/2,t[-1]))
-        xM1 = reshape(interp(t,tm,xM1),(-1,1))
-        xM2 = reshape(hstack((0,diff(self.xs[:,self.M],2,0)/diff(t[0:-1])/diff(t[1:]),0)),(-1,1))
-        self.xs = hstack((self.xs,xM1,xM2))
+        if status:
+            xs = np.array(sol.get('x'))
+            ys = np.array(sol.get('y'))
+            ss = np.array(sol.get('s'))
+            for i in range(self.GetNrConstraints()):
+                if self.bs[i+1] != 0:
+                    self.SetConstrCost(i, sum(ss[range(int(sum(self.bs[0:i+1])),int(sum(self.bs[0:i+1])+self.bs[i+1]))]))
+            if self.presolve == True:
+                xs = np.dot(self.At,xs)
+            self.xs = np.reshape(xs[0:(self.M+1)*(self.K+1)],(self.K+1,self.M+1),'F')
+            t = self.GetTime()
+            xM1 = np.hstack((0,np.diff(self.xs[:,self.M],1,0)/np.diff(t),0))
+            tm = np.hstack((t[0],t[0:-1]/2+t[1:]/2,t[-1]))
+            xM1 = np.reshape(np.interp(t,tm,xM1),(-1,1))
+            xM2 = np.reshape(np.hstack((0,np.diff(self.xs[:,self.M],2,0)/np.diff(t[0:-1])/np.diff(t[1:]),0)),(-1,1))
+            self.xs = np.hstack((self.xs,xM1,xM2))
         return (status,t2-t1)
     
     def GetIntegration(self):
-        dt = diff(self.GetTime())
-        Ai = zeros((0,(self.M+1)*(self.K+1)))
+        dt = np.diff(self.GetTime())
+        Ai = np.zeros((0,(self.M+1)*(self.K+1)))
         for n in range(1, self.M+1):
-            An1 = hstack((diag(n*dt**n/factorial(n+1),0),zeros((self.K,1))))
-            An1 = An1 + hstack((zeros((self.K,1)),diag(dt**n/factorial(n+1),0)))
-            An2 = empty((self.K,0))
+            An1 = np.hstack((np.diag(n*dt**n/factorial(n+1),0),np.zeros((self.K,1))))
+            An1 = An1 + np.hstack((np.zeros((self.K,1)),np.diag(dt**n/factorial(n+1),0)))
+            An2 = np.empty((self.K,0))
             for nv in range(1,n):
-                An2 = hstack((An2,diag(dt**nv/factorial(nv),0),zeros((self.K,1))))
-            An3 = hstack((eye(self.K),zeros((self.K,1))))
-            An3 = An3 + hstack((zeros((self.K,1)),-eye(self.K)))            
-            An4 = zeros((self.K,(self.M-n)*(self.K+1)))
-            An = hstack((An4,An3,An2,An1))
-            Ai = vstack((Ai,An))
+                An2 = np.hstack((An2,np.diag(dt**nv/factorial(nv),0),np.zeros((self.K,1))))
+            An3 = np.hstack((np.eye(self.K),np.zeros((self.K,1))))
+            An3 = An3 + np.hstack((np.zeros((self.K,1)),-np.eye(self.K)))            
+            An4 = np.zeros((self.K,(self.M-n)*(self.K+1)))
+            An = np.hstack((An4,An3,An2,An1))
+            Ai = np.vstack((Ai,An))
         return Ai
     
     def GetBoundCond(self):
-        if self.bctype == 0:
+        if self.bctype == 'zero':
             # Zero
-            Ab = zeros((2*self.N,(self.M+1)*(self.K+1)))
+            Ab = np.zeros((2*self.N,(self.M+1)*(self.K+1)))
             for i in range(1,self.N+1):
                 Ab[2*i-2,i*(self.K+1)] = 1
                 Ab[2*i-1,(i+1)*(self.K+1)-1] = 1
-        elif self.bctype == 1:
+        elif self.bctype == 'periodic':
             # Periodic
-            Ab = zeros((self.N+1,(self.M+1)*(self.K+1)))
+            Ab = np.zeros((self.N+1,(self.M+1)*(self.K+1)))
             for i in range(0,self.N+1):
                 Ab[i,i*(self.K+1)] = 1
                 Ab[i,(i+1)*(self.K+1)-1] = -1
-        elif self.bctype == 2:
+        elif self.bctype == 'symmetric':
             # Symmetric
-            Ab = zeros((self.N+1,(self.M+1)*(self.K+1)))
+            Ab = np.zeros((self.N+1,(self.M+1)*(self.K+1)))
             for i in range(0,self.N+1):
                 Ab[i,i*(self.K+1)] = 1
                 Ab[i,(i+1)*(self.K+1)-1] = (-1.0)**(i+1)         
@@ -399,18 +443,18 @@ class SplineOptim:
 
     def GetSlackCond(self,k):
         if k <= self.M:
-            As = hstack((zeros((self.K+1,int(max(0,k))*(self.K+1))),eye(self.K+1),zeros((self.K+1,(self.M-int(max(0,k)))*(self.K+1)))))
+            As = np.hstack((np.zeros((self.K+1,int(max(0,k))*(self.K+1))),np.eye(self.K+1),np.zeros((self.K+1,(self.M-int(max(0,k)))*(self.K+1)))))
         elif k == self.M+1:
-            dt = diff(self.GetTime())
-            Ap = hstack((diag(-1/dt,0),zeros((self.K,1))))
-            Ap = Ap + hstack((zeros((self.K,1)),diag(1/dt,0)))
-            As = hstack((zeros((self.K,self.M*(self.K+1))),Ap))
+            dt = np.diff(self.GetTime())
+            Ap = np.hstack((np.diag(-1/dt,0),np.zeros((self.K,1))))
+            Ap = Ap + np.hstack((np.zeros((self.K,1)),np.diag(1/dt,0)))
+            As = np.hstack((np.zeros((self.K,self.M*(self.K+1))),Ap))
         elif k == self.M+2:
-            dt = diff(self.GetTime())    
-            App = hstack((diag(1/dt[0:-1]/dt[1:],0),zeros((self.K-1,2))))
-            App = App + hstack((zeros((self.K-1,1)),-2*diag(1/dt[0:-1]/dt[1:],0),zeros((self.K-1,1))))
-            App = App + hstack((zeros((self.K-1,2)),diag(1/dt[0:-1]/dt[1:],0)))
-            As = hstack((zeros((self.K-1,self.M*(self.K+1))),App))
+            dt = np.diff(self.GetTime())    
+            App = np.hstack((np.diag(1/dt[0:-1]/dt[1:],0),np.zeros((self.K-1,2))))
+            App = App + np.hstack((np.zeros((self.K-1,1)),-2*np.diag(1/dt[0:-1]/dt[1:],0),np.zeros((self.K-1,1))))
+            App = App + np.hstack((np.zeros((self.K-1,2)),np.diag(1/dt[0:-1]/dt[1:],0)))
+            As = np.hstack((np.zeros((self.K-1,self.M*(self.K+1))),App))
         return As        
 
 class MainFrame(wx.Frame):
@@ -427,6 +471,7 @@ class MainFrame(wx.Frame):
         self.SetupSolveOptions()
         self.SetupConstraints()
         self.SetupObjectives()
+        self.ShowSolveOptions()
         self.PlotSolution()
 
     def SetupPanels(self):
@@ -525,8 +570,9 @@ class MainFrame(wx.Frame):
         self.btnSave.Bind(wx.EVT_BUTTON, self.OnSave, id=self.btnSave.GetId())
 
         self.stUnits = wx.StaticText(self.pnlSolveOptions, -1, "Units")
-        self.chUnits = wx.Choice(self.pnlSolveOptions, -1, choices=["time", "degrees"])
-        self.chUnits.SetSelection(self.SplineOptim.GetUnits())
+        self.chUnits = wx.Choice(self.pnlSolveOptions, -1, choices=self.SplineOptim.GetUnitTypes())
+        unitsSel = [i for i in range(0,len(self.SplineOptim.GetUnitTypes())) if self.SplineOptim.GetUnitTypes()[i] == self.SplineOptim.GetUnits()].pop(0)
+        self.chUnits.SetSelection(unitsSel)
 
         self.stRPM = wx.StaticText(self.pnlSolveOptions, -1, "RPM")
         self.edtRPM = wx.TextCtrl(self.pnlSolveOptions, -1, str(self.SplineOptim.GetRPM()))
@@ -544,19 +590,22 @@ class MainFrame(wx.Frame):
         self.edtContLevel = wx.TextCtrl(self.pnlSolveOptions, -1, str(self.SplineOptim.GetContLevel()))
 
         self.stBoundCondType = wx.StaticText(self.pnlSolveOptions, -1, "Bound. cond")
-        self.chBoundCondType = wx.Choice(self.pnlSolveOptions, -1, choices=["Zero", "Periodic", "Symmetric"])
-        self.chBoundCondType.SetSelection(self.SplineOptim.GetBoundCondType())
+        self.chBoundCondType = wx.Choice(self.pnlSolveOptions, -1, choices=self.SplineOptim.GetBoundCondTypes())
+        bctypeSel = [i for i in range(0,len(self.SplineOptim.GetBoundCondTypes())) if self.SplineOptim.GetBoundCondTypes()[i] == self.SplineOptim.GetBoundCondType()].pop(0)
+        self.chBoundCondType.SetSelection(bctypeSel)
 
         self.stBoundCondLevel = wx.StaticText(self.pnlSolveOptions, -1, "Bound. level")
         self.edtBoundCondLevel = wx.TextCtrl(self.pnlSolveOptions, -1, str(self.SplineOptim.GetBoundCondLevel()))
 
         self.stSolver = wx.StaticText(self.pnlSolveOptions, -1, "Solver")
-        self.chSolver = wx.Choice(self.pnlSolveOptions, -1, choices=["Cvxopt", "Clp"])
-        self.chSolver.SetSelection(self.SplineOptim.GetSolver())
+        self.chSolver = wx.Choice(self.pnlSolveOptions, -1, choices=self.SplineOptim.GetSolvers())
+        solverSel = [i for i in range(0,len(self.SplineOptim.GetSolvers())) if self.SplineOptim.GetSolvers()[i] == self.SplineOptim.GetSolver()].pop(0)
+        self.chSolver.SetSelection(solverSel)
 
-        self.stOutputLevel = wx.StaticText(self.pnlSolveOptions, -1, "Output level")        
-        self.chOutputLevel = wx.Choice(self.pnlSolveOptions, -1, choices=["None", "Verbose"])
-        self.chOutputLevel.SetSelection(self.SplineOptim.GetOutputLevel())
+        self.stOutput = wx.StaticText(self.pnlSolveOptions, -1, "Output level")        
+        self.chOutput = wx.Choice(self.pnlSolveOptions, -1, choices=self.SplineOptim.GetOutputTypes())
+        outputSel = [i for i in range(0,len(self.SplineOptim.GetOutputTypes())) if self.SplineOptim.GetOutputTypes()[i] == self.SplineOptim.GetOutput()].pop(0)
+        self.chOutput.SetSelection(outputSel)
         
         self.chUnits.Bind(wx.EVT_CHOICE, self.OnSolveOptions)
         self.edtRPM.Bind(wx.EVT_KILL_FOCUS, self.OnSolveOptions)
@@ -567,7 +616,7 @@ class MainFrame(wx.Frame):
         self.chBoundCondType.Bind(wx.EVT_CHOICE, self.OnSolveOptions)
         self.edtBoundCondLevel.Bind(wx.EVT_KILL_FOCUS, self.OnSolveOptions)
         self.chSolver.Bind(wx.EVT_CHOICE, self.OnSolveOptions)
-        self.chOutputLevel.Bind(wx.EVT_CHOICE, self.OnSolveOptions)
+        self.chOutput.Bind(wx.EVT_CHOICE, self.OnSolveOptions)
         
         for c in (self.btnSolve,self.btnLoad,self.btnSave):
             c.SetMinSize((self.optionsSize/3.0-self.border*2.0, self.minHeight))
@@ -577,12 +626,10 @@ class MainFrame(wx.Frame):
                   self.stStartTime,self.edtStartTime,self.stEndTime,self.edtEndTime,
                   self.stGridSize,self.edtGridSize,self.stContLevel,self.edtContLevel,
                   self.stBoundCondType,self.chBoundCondType,self.stBoundCondLevel,self.edtBoundCondLevel,
-                  self.stSolver,self.chSolver,self.stOutputLevel,self.chOutputLevel):
+                  self.stSolver,self.chSolver,self.stOutput,self.chOutput):
             c.SetMinSize((self.optionsSize/4.0-self.border*2.0, self.minHeight))
             bsSolveOptions2.Add(c, 0, self.layoutFlags, self.border)
-        
-        self.ShowSolveOptions()
-        
+                
     def SetupConstraints(self):
         bsConstraints1 = wx.FlexGridSizer(0,5,2,2)
         bsConstraints2 = wx.FlexGridSizer(0,3,2,2)
@@ -592,7 +639,7 @@ class MainFrame(wx.Frame):
         
         self.edtFromTime = wx.TextCtrl(self.pnlConstraints, -1, "0")
         self.stFromTime = wx.StaticText(self.pnlConstraints, -1, "<=", style=wx.ALIGN_CENTER)
-        self.stTime = wx.StaticText(self.pnlConstraints, -1, "Time", style=wx.ALIGN_CENTER)
+        self.stTime = wx.StaticText(self.pnlConstraints, -1, "time", style=wx.ALIGN_CENTER)
         self.stToTime = wx.StaticText(self.pnlConstraints, -1, "<=", style=wx.ALIGN_CENTER)
         self.edtToTime = wx.TextCtrl(self.pnlConstraints, -1, "1")
         self.edtFromValue = wx.TextCtrl(self.pnlConstraints, -1, "0")
@@ -624,7 +671,6 @@ class MainFrame(wx.Frame):
         self.lbConstraints.Bind(wx.EVT_LISTBOX, self.OnConstraints)
         self.lbConstraints.SetMinSize((self.optionsSize-self.border*2.0, self.minHeight*6))
         bsConstraints3.Add(self.lbConstraints, 0, self.layoutFlags, self.border)        
-
         self.ShowConstraints()
         
         
@@ -661,22 +707,38 @@ class MainFrame(wx.Frame):
         self.lbObjectives.Bind(wx.EVT_LISTBOX, self.OnObjectives)
 
         bsObjectives3.Add(self.lbObjectives, 0, self.layoutFlags, self.border)
-
         self.ShowObjectives()
         
     def PlotSolution(self):
         time = self.SplineOptim.GetTime()
         names = self.SplineOptim.GetNames()
         norms = self.SplineOptim.GetNorms()
+        constraints = self.SplineOptim.GetConstraints()
+        colour = ['blue','green','black','violet']
         for i in range(0,self.SplineOptim.GetContLevel()+3):
+            lines = []
             x = self.SplineOptim.GetSolution(i)
-            data = vstack((time,x))
-            line = plot.PolyLine(data.transpose(), colour='red', width=1) #, legend=names[i].lower())
+            data = np.vstack((time,x))
+            line = plot.PolyLine(data.transpose(), colour='blue', width=1, legend=names[i].lower())
+            lines.insert(len(lines),line)
+            for j in range(0,constraints.shape[0]):
+                if int(constraints[j,0]) == i:
+                    tlu = np.array([constraints[j,1],constraints[j,2],constraints[j,2],constraints[j,1],constraints[j,1]])
+                    xlu = np.array([constraints[j,3],constraints[j,3],constraints[j,4],constraints[j,4],constraints[j,3]])
+                    datalu = np.vstack((tlu,xlu))
+                    if constraints[j,1] == constraints[j,2]:
+                        markerlu = plot.PolyMarker(datalu.transpose(), marker='cross', colour='red', width=1, legend='constraint '+str(j+1))
+                        lines.insert(len(lines),markerlu)
+                    else:
+                        linelu = plot.PolyLine(datalu.transpose(), colour='red', width=1, legend='constraint '+str(j+1))
+                        lines.insert(len(lines),linelu)
             xAxis = 'time [s]'
             yAxis = names[i].lower() + ' (m/s^' + str(i) + ')'
-            self.plotCanvas[i].Draw(plot.PlotGraphics([line], names[i], xAxis, yAxis))        
+            self.plotCanvas[i].Draw(plot.PlotGraphics(lines, names[i], xAxis, yAxis))        
+            self.plotCanvas[i].enableLegend = True
+            self.plotCanvas[i].fontSizeLegend = 8
+
         line = []
-        colour = ['blue','green','black','violet']
         for i in range(0,self.SplineOptim.GetNrObjectives()):
             wi = self.SplineOptim.GetObjWeight(i)
             ni = int(self.SplineOptim.GetObjNorm(i))
@@ -687,12 +749,13 @@ class MainFrame(wx.Frame):
                 x = wi*self.SplineOptim.GetSolution(vi)**2.0
             elif ni >= 2:
                 x = wi*abs(self.SplineOptim.GetSolution(vi))
-            data = vstack((time,x))
-            line.insert(i,plot.PolyLine(data.transpose(), colour=colour[i], width=1)) #, legend=norms[ni] + ' ' + names[vi]))
+            data = np.vstack((time,x))
+            line.insert(i,plot.PolyLine(data.transpose(), colour=colour[i], width=1, legend=norms[ni] + ' ' + names[vi]))
         xAxis = 'time [s]'
         yAxis = 'weighted objective functions [-]'
         self.plotCanvas[self.SplineOptim.GetContLevel()+3].Draw(plot.PlotGraphics(line, 'Objective functions', xAxis, yAxis))        
-            
+        self.plotCanvas[self.SplineOptim.GetContLevel()+3].enableLegend = True
+        self.plotCanvas[self.SplineOptim.GetContLevel()+3].fontSizeLegend = 8
 
     def OnLoad(self, evt):
         flDialog = wx.FileDialog(self, defaultFile='splineoptim.xml', wildcard='*.xml', style=wx.FD_OPEN)
@@ -700,12 +763,20 @@ class MainFrame(wx.Frame):
             return
         fileName = flDialog.GetPath()
         doc = minidom.parse(fileName)
+        d = dict()
         for child in doc.childNodes:
             for child2 in child.childNodes:
                 if child2.hasChildNodes():
-                    print(child2.nodeName)
-                    print(child2.childNodes[0].data)
-        
+                    if child2.childNodes[0].nodeValue.isalpha():
+                        d[child2.nodeName] = child2.childNodes[0].nodeValue
+                    else:
+                        d[child2.nodeName] = eval(child2.childNodes[0].nodeValue)
+        d['constraints'] = np.array(d['constraints'])
+        d['objectives'] = np.array(d['objectives'])
+        self.SplineOptim.SetDict(d)
+        self.ShowSolveOptions()
+        self.ShowConstraints()
+        self.ShowObjectives()
                 
     def OnSave(self, evt):
         flDialog = wx.FileDialog(self, defaultFile='splineoptim.xml', wildcard='*.xml', style=wx.FD_SAVE)
@@ -715,11 +786,13 @@ class MainFrame(wx.Frame):
         doc = minidom.Document()
         root = doc.createElement('SplineOptim')
         XMLvalues = self.SplineOptim.GetDict()
-        print(XMLvalues)
         for value in XMLvalues:
             tempChild = doc.createElement(value)
             root.appendChild(tempChild)
-            nodeText = doc.createTextNode(str(XMLvalues[value]).strip())
+            if (type(XMLvalues[value]) == int) or(type(XMLvalues[value]) == float) or (type(XMLvalues[value]) == str):
+                nodeText = doc.createTextNode(str(XMLvalues[value]).strip())
+            else:
+                nodeText = doc.createTextNode(np.array2string(XMLvalues[value],separator=',').strip())
             tempChild.appendChild(nodeText)
         doc.appendChild(root)
         doc.writexml(open(fileName,'w'),indent=' ',addindent=' ',newl='\n')
@@ -741,45 +814,80 @@ class MainFrame(wx.Frame):
             self.btnSolve.SetForegroundColour(wx.Colour(180,0,0))
 
     def OnAbout(self, evt):
-        abtInfo = wx.AboutDialogInfo()
-        abtInfo.SetName("SplineOptim")
-        abtInfo.SetDescription("A program for motion law design (2018). "\
-                               "Based on article: Optimal Splines for Rigid Motion Systems: A Convex Programming Framework, "\
-                               "B. Demeulenaere, J. De Caigny, G. Pipeleers, J. De Schutter and J. Swevers, "\
-                               "Journal of Mechanical Design 131(10).")
-        abtInfo.SetDevelopers(["Diederik Verscheure"])
+        title = 'SplineOptim'
+        text = "A program for motion law design (2018). "\
+               "Based on article: Optimal Splines for Rigid Motion Systems: A Convex Programming Framework, "\
+               "B. Demeulenaere, J. De Caigny, G. Pipeleers, J. De Schutter and J. Swevers, "\
+               "Journal of Mechanical Design 131(10)."
+        developer = 'Diederik Verscheure'
+        abtInfo = wx.adv.AboutDialogInfo()
+        abtInfo.SetName(title)
+        abtInfo.SetDescription(text)
+        abtInfo.SetDevelopers([developer])
         abtInfo.SetCopyright("GPL license")
         abtInfo.SetVersion("0.1")
         abtInfo.SetWebSite("https://github.com/diederikverscheure/splineoptim")
-        wx.AboutBox(abtInfo)
+        wx.adv.AboutBox(abtInfo)
 
     def OnSolveOptions(self, evt):
-        units = self.chUnits.GetSelection()
+        units = self.SplineOptim.GetUnitTypes()[self.chUnits.GetSelection()]
         RPM = float(self.edtRPM.GetValue())
-        ts = float(self.edtStartTime.GetValue())
-        te = float(self.edtEndTime.GetValue())
+        if self.SplineOptim.GetUnits() == 'time':
+            ts = float(self.edtStartTime.GetValue())
+            te = float(self.edtEndTime.GetValue())
+        else:
+            ts = float(self.edtStartTime.GetValue())/360.0*60.0/RPM
+            te = float(self.edtEndTime.GetValue())/360.0*60.0/RPM            
         K = float(self.edtGridSize.GetValue())
         M = float(self.edtContLevel.GetValue()) 
-        bctype = self.chBoundCondType.GetSelection()
+        bctype = self.SplineOptim.GetBoundCondTypes()[self.chBoundCondType.GetSelection()]
         N = float(self.edtBoundCondLevel.GetValue())
-        solver = self.chSolver.GetSelection()
-        output = self.chOutputLevel.GetSelection()
+        solver = self.SplineOptim.GetSolvers()[self.chSolver.GetSelection()]
+        output = self.SplineOptim.GetOutputTypes()[self.chOutput.GetSelection()]
         self.SplineOptim.SetOptions(units, RPM, ts, te, K, M, bctype, N, solver, output)
         self.ShowSolveOptions()
         self.ShowConstraints()
         self.ShowObjectives()
         
     def ShowSolveOptions(self):
-        units = self.chUnits.GetSelection()
-        if units == 0:
+        units = self.SplineOptim.GetUnits()
+        unitsSel = [i for i in range(0,len(self.SplineOptim.GetUnitTypes())) if self.SplineOptim.GetUnitTypes()[i] == units].pop(0)
+        self.chUnits.SetSelection(unitsSel)
+        RPM = self.SplineOptim.GetRPM()
+        self.edtRPM.SetValue(str(RPM))
+        ts = self.SplineOptim.GetStartTime()
+        self.edtStartTime.SetValue(str(ts))
+        te = self.SplineOptim.GetEndTime()
+        self.edtEndTime.SetValue(str(te))
+        K = self.SplineOptim.GetGridSize()
+        self.edtGridSize.SetValue(str(K))
+        M = self.SplineOptim.GetContLevel()
+        self.edtContLevel.SetValue(str(M)) 
+        bctype = self.SplineOptim.GetBoundCondType()
+        bctypeSel = [i for i in range(0,len(self.SplineOptim.GetBoundCondTypes())) if self.SplineOptim.GetBoundCondTypes()[i] == bctype].pop(0)
+        self.chBoundCondType.SetSelection(bctypeSel)
+        N = self.SplineOptim.GetBoundCondLevel()
+        self.edtBoundCondLevel.SetValue(str(N))
+        solver = self.SplineOptim.GetSolver()
+        solverSel = [i for i in range(0,len(self.SplineOptim.GetSolvers())) if self.SplineOptim.GetSolvers()[i] == solver].pop(0)
+        self.chSolver.SetSelection(solverSel)
+        output = self.SplineOptim.GetOutput()
+        outputSel = [i for i in range(0,len(self.SplineOptim.GetOutputTypes())) if self.SplineOptim.GetOutputTypes()[i] == output].pop(0)
+        self.chOutput.SetSelection(outputSel)        
+        if units == 'time':
             self.edtRPM.Hide()
             self.stRPM.Hide()
+            self.stStartTime.SetLabel('Start time')
+            self.stEndTime.SetLabel('End time')
+            self.stTime.SetLabel('time')
         else:
             self.edtRPM.Show()
             self.stRPM.Show()
+            self.stStartTime.SetLabel('Start angle')
+            self.stEndTime.SetLabel('End angle')
+            self.stTime.SetLabel('angle')
     
     def ShowConstraints(self):
-        constraints = self.SplineOptim.GetConstraints()
         names = self.SplineOptim.GetNames()
         self.chConstrValue.SetItems(names)
         sel = self.lbConstraints.GetSelection()
@@ -794,24 +902,24 @@ class MainFrame(wx.Frame):
                 c = round(self.SplineOptim.GetConstrCost(i)/self.SplineOptim.GetTotalConstrCost()*100*1000)/1000
             else:
                 c = 0
-            item = str(c) + "%" + (5-len(str(c)))*" " +  " - "
-            if isfinite(tl) and isfinite(tu) and not (tl == tu): 
+            item = str(i+1) + ') ' + str(c) + "%" + (5-len(str(c)))*" " +  " - "
+            if np.isfinite(tl) and np.isfinite(tu) and not (tl == tu): 
                 item = item + str(tl) + " <= t <= " + str(tu)
-            elif isfinite(tl) and isfinite(tu) and tl == tu: 
+            elif np.isfinite(tl) and np.isfinite(tu) and tl == tu: 
                 item = item + "t == " + str(tl)
-            elif isfinite(tl) and not isfinite(tu): 
+            elif np.isfinite(tl) and not np.isfinite(tu): 
                 item = item + str(tl) + " <= t"
-            elif not isfinite(tl) and isfinite(tu): 
+            elif not np.isfinite(tl) and np.isfinite(tu): 
                 item = item + "t <= " + str(tu)
             else:
                 item = item + "t"
-            if isfinite(xl) and isfinite(xu) and not (xl == xu): 
+            if np.isfinite(xl) and np.isfinite(xu) and not (xl == xu): 
                 item = item + ", " + str(xl) + " <= " + names[k] + " <= " + str(xu)
-            elif isfinite(xl) and isfinite(xu) and xl == xu: 
+            elif np.isfinite(xl) and np.isfinite(xu) and xl == xu: 
                 item = item + ", " + names[k] + " == " + str(xl)
-            elif isfinite(xl) and not isfinite(xu): 
+            elif np.isfinite(xl) and not np.isfinite(xu): 
                 item = item + ", " + str(tl) + " <= " + names[k] 
-            elif not isfinite(xl) and isfinite(xu): 
+            elif not np.isfinite(xl) and np.isfinite(xu): 
                 item = item + ", " + names[k] + " <= " + str(xu) 
             else:
                 item = item + ", " + names[k]
@@ -845,19 +953,19 @@ class MainFrame(wx.Frame):
             try:
                 tl = float(self.edtFromTime.GetValue())
             except ValueError:
-                tl = -inf
+                tl = -np.inf
             try:
                 tu = float(self.edtToTime.GetValue())
             except ValueError:
-                tu = inf
+                tu = np.inf
             try:
                 xl = float(self.edtFromValue.GetValue())
             except ValueError:
-                xl = -inf
+                xl = -np.inf
             try:
                 xu = float(self.edtToValue.GetValue())
             except ValueError:
-                xu = inf
+                xu = np.inf
             self.SplineOptim.UpdateConstraint(i, k, tl, tu, xl, xu)
         self.ShowConstraints()
             
@@ -881,7 +989,7 @@ class MainFrame(wx.Frame):
             n = int(objectives[i,0])
             k = int(objectives[i,1])
             w = objectives[i,2]
-            item = str(w) + " x " + norms[n] + " " + names[k]
+            item = str(i+1) + ') ' + str(w) + " x " + norms[n] + " " + names[k]
             self.lbObjectives.Append(item)
         if sel >= 0 and sel < objectives.shape[0]:
             self.lbObjectives.SetSelection(sel)
