@@ -1,4 +1,5 @@
 import sys
+import math
 import numpy as np
 import cvxopt as cvx
 from cvxopt import umfpack
@@ -45,10 +46,20 @@ class SplineOptim:
         return self.RPM
 
     def GetStartTime(self):
-        return self.ts
+        if self.units == 'time':
+            return self.ts
+        elif self.units == 'degrees':
+            return self.ts*(360.0*self.RPM/60.0)
+        else:
+            return self.ts*(2.0*math.pi*self.RPM/60.0)            
         
     def GetEndTime(self):
-        return self.te
+        if self.units == 'time':
+            return self.te
+        elif self.units == 'degrees':
+            return self.te*(360.0*self.RPM/60.0)
+        else:
+            return self.te*(2.0*math.pi*self.RPM/60.0)            
 
     def GetGridSize(self):
         return self.K
@@ -78,16 +89,31 @@ class SplineOptim:
         return ['none','verbose']
                 
     def GetTime(self):
-        return np.linspace(self.ts,self.te,self.K+1)
+        if self.units == 'time':
+            return np.linspace(self.ts,self.te,self.K+1)
+        elif self.units == 'degrees':
+            return np.linspace(self.ts,self.te,self.K+1)*(360.0*self.RPM/60.0)
+        elif self.units == 'radians':
+            return np.linspace(self.ts,self.te,self.K+1)*(2.0*math.pi*self.RPM/60.0)
+                
     
     def GetSolution(self, k):
         if k <= self.xs.shape[1]:
             return self.xs[:,k]
             
     def GetConstraints(self):
-        return self.constraints
-    
+        constraints = np.copy(self.constraints)
+        if self.units == 'degrees':
+            constraints[:,1:3] = constraints[:,1:3]*(360.0*self.RPM/60.0)
+        elif self.units == 'radians':
+            constraints[:,1:3] = constraints[:,1:3]*(2.0*math.pi*self.RPM/60.0)
+        return constraints
+            
     def SetConstraints(self,constraints):
+        #if self.units == 'degrees':
+        #    constraints[:,1:3] = constraints[:,1:3]/(360.0*self.RPM/60.0)
+        #elif self.units == 'radians':
+        #    constraints[:,1:3] = constraints[:,1:3]/(2.0*math.pi*self.RPM/60.0)
         self.constraints = constraints
 
     def GetObjectives(self):
@@ -120,10 +146,18 @@ class SplineOptim:
     def SetOptions(self, units, RPM, ts, te, K, M, bctype, N, solver, output):
         self.units = units
         self.RPM = RPM
-        self.ts = ts
-        self.te = te
         if self.units == 'time':
-            self.RPM = 1.0/self.te*60
+            self.ts = ts
+            self.te = te
+            self.RPM = 1.0/self.te*60.0
+        elif self.units == 'degrees':
+            self.ts = ts
+            self.te = te
+            self.RPM = 1.0/self.te*60.0
+        elif self.units == 'radians':
+            self.ts = ts
+            self.te = te
+            self.RPM = 1.0/self.te*60.0
         self.K = int(K)
         self.M = int(M)
         self.bctype = bctype
@@ -156,19 +190,39 @@ class SplineOptim:
         
     def GetFromTime(self, i):
         if i <= self.GetNrConstraints():
-            return self.constraints[i,1]
+            if self.units == 'time':
+                return self.constraints[i,1]
+            elif self.units == 'degrees':
+                return self.constraints[i,1]*(360.0*self.RPM/60.0)
+            else:
+                return self.constraints[i,1]*(2.0*math.pi*self.RPM/60.0)           
         
     def SetFromTime(self, i, tl):
         if i <= self.GetNrConstraints():
-            self.constraints[i,1] = tl
+            if self.units == 'time':
+                self.constraints[i,1] = tl
+            elif self.units == 'degrees':
+                self.constraints[i,1] = tl/(360.0*self.RPM/60.0)
+            else:
+                self.constraints[i,1] = tl/(2.0*math.pi*self.RPM/60.0)
 
     def GetToTime(self, i):
         if i <= self.GetNrConstraints():
-            return self.constraints[i,2]
+            if self.units == 'time':
+                return self.constraints[i,2]
+            elif self.units == 'degrees':
+                return self.constraints[i,2]*(360.0*self.RPM/60.0)
+            else:
+                return self.constraints[i,2]*(2.0*math.pi*self.RPM/60.0)  
 
     def SetToTime(self, i, tu):
         if i <= self.GetNrConstraints():
-            self.constraints[i,2] = tu
+            if self.units == 'time':
+                self.constraints[i,2] = tu
+            elif self.units == 'degrees':
+                self.constraints[i,2] = tu/(360.0*self.RPM/60.0)
+            else:
+                self.constraints[i,2] = tu/(2.0*math.pi*self.RPM/60.0)
             
     def GetFromValue(self, i):
         if i <= self.GetNrConstraints():
@@ -291,7 +345,7 @@ class SplineOptim:
         # Slack variables?
         bs = np.zeros((0,1))
         c = np.zeros(((self.K+1)*(self.M+1),1))        
-        t = self.GetTime()
+        t = np.linspace(self.ts,self.te,self.K+1)
         for i in range(self.GetNrObjectives()):
             n = self.GetObjNorm(i)
             k = self.GetObjValue(i)
@@ -318,11 +372,11 @@ class SplineOptim:
             bineq = np.vstack((bineq,np.zeros((Ao.shape[0],1))))
         bs = np.vstack((bs,bineq.shape[0]))
         for i in range(self.GetNrConstraints()):
-            k = self.GetConstrValue(i)
-            tl = self.GetFromTime(i)
-            tu = self.GetToTime(i)
-            xl = self.GetFromValue(i)
-            xu = self.GetToValue(i)
+            k = self.constraints[i,0]
+            tl = self.constraints[i,1]
+            tu = self.constraints[i,2]
+            xl = self.constraints[i,3]
+            xu = self.constraints[i,4]
             ti = np.hstack((tl,t[(t>tl)*(t<tu)],tu))
             ti = np.unique(np.setdiff1d(ti,[-np.inf, np.inf]))
             Ac = np.zeros((ti.shape[0],(self.M+1)*(self.K+1)))
@@ -396,7 +450,7 @@ class SplineOptim:
             if self.presolve == True:
                 xs = np.dot(self.At,xs)
             self.xs = np.reshape(xs[0:(self.M+1)*(self.K+1)],(self.K+1,self.M+1),'F')
-            t = self.GetTime()
+            t = np.linspace(self.ts,self.te,self.K+1)
             xM1 = np.hstack((0,np.diff(self.xs[:,self.M],1,0)/np.diff(t),0))
             tm = np.hstack((t[0],t[0:-1]/2+t[1:]/2,t[-1]))
             xM1 = np.reshape(np.interp(t,tm,xM1),(-1,1))
@@ -405,7 +459,7 @@ class SplineOptim:
         return (status,t2-t1)
     
     def GetIntegration(self):
-        dt = np.diff(self.GetTime())
+        dt = np.diff(np.linspace(self.ts,self.te,self.K+1))
         Ai = np.zeros((0,(self.M+1)*(self.K+1)))
         for n in range(1, self.M+1):
             An1 = np.hstack((np.diag(n*dt**n/factorial(n+1),0),np.zeros((self.K,1))))
@@ -445,12 +499,12 @@ class SplineOptim:
         if k <= self.M:
             As = np.hstack((np.zeros((self.K+1,int(max(0,k))*(self.K+1))),np.eye(self.K+1),np.zeros((self.K+1,(self.M-int(max(0,k)))*(self.K+1)))))
         elif k == self.M+1:
-            dt = np.diff(self.GetTime())
+            dt = np.diff(np.linspace(self.ts,self.te,self.K+1))
             Ap = np.hstack((np.diag(-1/dt,0),np.zeros((self.K,1))))
             Ap = Ap + np.hstack((np.zeros((self.K,1)),np.diag(1/dt,0)))
             As = np.hstack((np.zeros((self.K,self.M*(self.K+1))),Ap))
         elif k == self.M+2:
-            dt = np.diff(self.GetTime())    
+            dt = np.diff(np.linspace(self.ts,self.te,self.K+1))    
             App = np.hstack((np.diag(1/dt[0:-1]/dt[1:],0),np.zeros((self.K-1,2))))
             App = App + np.hstack((np.zeros((self.K-1,1)),-2*np.diag(1/dt[0:-1]/dt[1:],0),np.zeros((self.K-1,1))))
             App = App + np.hstack((np.zeros((self.K-1,2)),np.diag(1/dt[0:-1]/dt[1:],0)))
@@ -832,18 +886,26 @@ class MainFrame(wx.Frame):
     def OnSolveOptions(self, evt):
         units = self.SplineOptim.GetUnitTypes()[self.chUnits.GetSelection()]
         RPM = float(self.edtRPM.GetValue())
+        constraints = self.SplineOptim.GetConstraints()
         if self.SplineOptim.GetUnits() == 'time':
             ts = float(self.edtStartTime.GetValue())
             te = float(self.edtEndTime.GetValue())
-        else:
-            ts = float(self.edtStartTime.GetValue())/360.0*60.0/RPM
-            te = float(self.edtEndTime.GetValue())/360.0*60.0/RPM            
+            constraints = constraints
+        elif self.SplineOptim.GetUnits() == 'degrees':
+            ts = float(self.edtStartTime.GetValue())/(360.0*RPM/60.0)
+            te = float(self.edtEndTime.GetValue())/(360.0*RPM/60.0)
+            constraints[:,1:3] = constraints[:,1:3]/(360.0*RPM/60.0)
+        elif self.SplineOptim.GetUnits() == 'radians':
+            ts = float(self.edtStartTime.GetValue())/(2.0*math.pi*RPM/60.0)
+            te = float(self.edtEndTime.GetValue())/(2.0*math.pi*RPM/60.0)
+            constraints[:,1:3] = constraints[:,1:3]/(2.0*math.pi*RPM/60.0)
         K = float(self.edtGridSize.GetValue())
         M = float(self.edtContLevel.GetValue()) 
         bctype = self.SplineOptim.GetBoundCondTypes()[self.chBoundCondType.GetSelection()]
         N = float(self.edtBoundCondLevel.GetValue())
         solver = self.SplineOptim.GetSolvers()[self.chSolver.GetSelection()]
         output = self.SplineOptim.GetOutputTypes()[self.chOutput.GetSelection()]
+        self.SplineOptim.SetConstraints(constraints)
         self.SplineOptim.SetOptions(units, RPM, ts, te, K, M, bctype, N, solver, output)
         self.ShowSolveOptions()
         self.ShowConstraints()
@@ -933,8 +995,15 @@ class MainFrame(wx.Frame):
             
     def OnAddConstraint(self, evt):
         k = self.chConstrValue.GetSelection()
-        tl = float(self.edtFromTime.GetValue())
-        tu = float(self.edtToTime.GetValue())
+        if self.SplineOptim.GetUnits() == 'time':
+            tl = float(self.edtFromTime.GetValue())
+            tu = float(self.edtToTime.GetValue())
+        elif self.SplineOptim.GetUnits() == 'degrees':
+            tl = float(self.edtFromTime.GetValue())
+            tu = float(self.edtToTime.GetValue())
+        elif self.SplineOptim.GetUnits() == 'radians':
+            tl = float(self.edtFromTime.GetValue())
+            tu = float(self.edtToTime.GetValue())
         xl = float(self.edtFromValue.GetValue())
         xu = float(self.edtToValue.GetValue())
         self.SplineOptim.AddConstraint(k, tl, tu, xl, xu)
