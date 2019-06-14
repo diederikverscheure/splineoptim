@@ -6,6 +6,8 @@ Based on article: Optimal Splines for Rigid Motion Systems: A Convex Programming
 B. Demeulenaere, J. De Caigny, G. Pipeleers, J. De Schutter and J. Swevers.
 Journal of Mechanical Design 131(10).
 
+![picture alt](splineoptim.jpg "SplineOptim")
+
 ## Requirements
 * wxpython - https://www.wxpython.org/
 * numpy - http://www.numpy.org/
